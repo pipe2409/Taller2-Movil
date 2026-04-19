@@ -21,10 +21,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.FileProvider
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.media3.common.MediaItem
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
+import com.example.taller2_movil.viewmodel.MediaMode
+import com.example.taller2_movil.viewmodel.MediaViewModel
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberPermissionState
@@ -34,14 +37,12 @@ import java.util.*
 
 @OptIn(ExperimentalPermissionsApi::class)
 @Composable
-fun MediaScreen(onBack: () -> Unit) {
+fun MediaScreen(
+    onBack: () -> Unit,
+    viewModel: MediaViewModel = viewModel()
+) {
     val context = LocalContext.current
-
-    // true = Foto, false = Video
-    var isPhotoMode by remember { mutableStateOf(true) }
-
-    var mediaUri by remember { mutableStateOf<Uri?>(null) }
-    var tempCameraUri by remember { mutableStateOf<Uri?>(null) }
+    val uiState by viewModel.uiState.collectAsState()
 
     // --- Permisos ---
     val cameraPermission = rememberPermissionState(Manifest.permission.CAMERA)
@@ -52,27 +53,24 @@ fun MediaScreen(onBack: () -> Unit) {
     val takePhotoLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicture()
     ) { success ->
-        if (success) mediaUri = tempCameraUri
+        viewModel.onCameraResult(success)
     }
 
     // Grabar video
     val takeVideoLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CaptureVideo()
     ) { success ->
-        if (success) mediaUri = tempCameraUri
+        viewModel.onCameraResult(success)
     }
 
-    // Seleccionar foto de galería
-    val pickPhotoLauncher = rememberLauncherForActivityResult(
+    // Seleccionar de galería
+    val pickMediaLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
-    ) { uri -> uri?.let { mediaUri = it } }
+    ) { uri ->
+        viewModel.onGalleryResult(uri)
+    }
 
-    // Seleccionar video de galería
-    val pickVideoLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri -> uri?.let { mediaUri = it } }
-
-    // --- Helpers para crear URI temporal de cámara ---
+    // --- Helper para crear URI temporal de cámara ---
     fun createTempUri(isPhoto: Boolean): Uri {
         val ext = if (isPhoto) ".jpg" else ".mp4"
         val file = File.createTempFile(
@@ -83,15 +81,14 @@ fun MediaScreen(onBack: () -> Unit) {
         return FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
     }
 
-    // Cuando cambia el modo, limpiar media anterior
-    LaunchedEffect(isPhotoMode) { mediaUri = null }
+    val isPhotoMode = uiState.mode == MediaMode.PHOTO
 
     // --- UI ---
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFFF5F5F5))
-            .windowInsetsPadding(WindowInsets.systemBars) // <--- ESTO SOLUCIONA LA OBSTRUCCIÓN
+            .windowInsetsPadding(WindowInsets.systemBars)
             .padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(24.dp)
@@ -110,7 +107,9 @@ fun MediaScreen(onBack: () -> Unit) {
             )
             Switch(
                 checked = !isPhotoMode,
-                onCheckedChange = { isPhotoMode = !it },
+                onCheckedChange = { 
+                    viewModel.setMode(if (it) MediaMode.VIDEO else MediaMode.PHOTO) 
+                },
                 colors = SwitchDefaults.colors(
                     checkedThumbColor = Color.White,
                     checkedTrackColor = Color(0xFF1E3A6E),
@@ -136,7 +135,7 @@ fun MediaScreen(onBack: () -> Unit) {
             contentAlignment = Alignment.Center
         ) {
             when {
-                mediaUri == null -> {
+                uiState.mediaUri == null -> {
                     Text(
                         text = if (isPhotoMode) "Sin foto" else "Sin video",
                         color = Color.Gray,
@@ -145,7 +144,7 @@ fun MediaScreen(onBack: () -> Unit) {
                 }
                 isPhotoMode -> {
                     AsyncImage(
-                        model = mediaUri,
+                        model = uiState.mediaUri,
                         contentDescription = "Foto seleccionada",
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop
@@ -153,7 +152,7 @@ fun MediaScreen(onBack: () -> Unit) {
                 }
                 else -> {
                     VideoPlayer(
-                        uri = mediaUri!!,
+                        uri = uiState.mediaUri!!,
                         modifier = Modifier.fillMaxSize()
                     )
                 }
@@ -168,11 +167,12 @@ fun MediaScreen(onBack: () -> Unit) {
             Button(
                 onClick = {
                     if (cameraPermission.status.isGranted) {
-                        tempCameraUri = createTempUri(isPhotoMode)
+                        val uri = createTempUri(isPhotoMode)
+                        viewModel.setTempCameraUri(uri)
                         if (isPhotoMode) {
-                            takePhotoLauncher.launch(tempCameraUri!!)
+                            takePhotoLauncher.launch(uri)
                         } else {
-                            takeVideoLauncher.launch(tempCameraUri!!)
+                            takeVideoLauncher.launch(uri)
                         }
                     } else {
                         cameraPermission.launchPermissionRequest()
@@ -194,11 +194,8 @@ fun MediaScreen(onBack: () -> Unit) {
             // Botón Seleccionar de Galería
             Button(
                 onClick = {
-                    if (isPhotoMode) {
-                        pickPhotoLauncher.launch("image/*")
-                    } else {
-                        pickVideoLauncher.launch("video/*")
-                    }
+                    val mimeType = if (isPhotoMode) "image/*" else "video/*"
+                    pickMediaLauncher.launch(mimeType)
                 },
                 shape = RoundedCornerShape(24.dp),
                 colors = ButtonDefaults.buttonColors(
