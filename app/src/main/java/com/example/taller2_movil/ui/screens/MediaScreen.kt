@@ -1,7 +1,6 @@
 package com.example.taller2_movil.ui.screens
 
 import android.Manifest
-import android.content.Context
 import android.net.Uri
 import android.os.Environment
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -182,12 +181,14 @@ fun MediaScreen(onBack: () -> Unit) {
                 },
                 shape = RoundedCornerShape(24.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFF1E3A6E)
+                    containerColor = Color(0xFF1E3A6E),
+                    contentColor = Color.White
                 )
             ) {
                 Text(
                     text = if (isPhotoMode) "Tomar Foto" else "Grabar Video",
-                    fontSize = 14.sp
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold
                 )
             }
 
@@ -202,12 +203,14 @@ fun MediaScreen(onBack: () -> Unit) {
                 },
                 shape = RoundedCornerShape(24.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFF1E3A6E)
+                    containerColor = Color(0xFF1E3A6E),
+                    contentColor = Color.White
                 )
             ) {
                 Text(
                     text = if (isPhotoMode) "Seleccionar Foto" else "Seleccionar Video",
-                    fontSize = 14.sp
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold
                 )
             }
         }
