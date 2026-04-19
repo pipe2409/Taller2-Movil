@@ -1,13 +1,6 @@
 package com.example.taller2_movil.ui.screens
 
 import android.Manifest
-import android.annotation.SuppressLint
-import android.content.Context
-import android.hardware.Sensor
-import android.hardware.SensorEvent
-import android.hardware.SensorEventListener
-import android.hardware.SensorManager
-import android.location.Geocoder
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -18,21 +11,17 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.taller2_movil.viewmodel.MapViewModel
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.rememberMultiplePermissionsState
-import com.google.android.gms.location.LocationServices
-import com.google.android.gms.location.Priority
 import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.android.gms.maps.model.*
 import com.google.maps.android.compose.*
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.tasks.await
-import java.util.Locale
 
 // ─── Estilos JSON del mapa ───────────────────────────────────────────────────
 private const val MAP_STYLE_DARK = """
@@ -48,9 +37,11 @@ private const val MAP_STYLE_DARK = """
 
 @OptIn(ExperimentalPermissionsApi::class)
 @Composable
-fun MapScreen(onBack: () -> Unit) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
+fun MapScreen(
+    onBack: () -> Unit,
+    viewModel: MapViewModel = viewModel()
+) {
+    val uiState by viewModel.uiState.collectAsState()
     val keyboardController = LocalSoftwareKeyboardController.current
 
     // ── Permisos de localización ──────────────────────────────────────────────
@@ -63,113 +54,29 @@ fun MapScreen(onBack: () -> Unit) {
 
     // ── Estado del mapa ───────────────────────────────────────────────────────
     val cameraPositionState = rememberCameraPositionState()
-    var userLocation by remember { mutableStateOf<LatLng?>(null) }
-    var followUser by remember { mutableStateOf(false) }
-    var routePoints by remember { mutableStateOf<List<LatLng>>(emptyList()) }
-    var searchedMarker by remember { mutableStateOf<LatLng?>(null) }
-    var searchedTitle by remember { mutableStateOf("") }
-    var longClickMarkers by remember { mutableStateOf<List<Pair<LatLng, String>>>(emptyList()) }
     var addressInput by remember { mutableStateOf("") }
 
-    // ── Sensor de luminosidad ─────────────────────────────────────────────────
-    var isDarkMap by remember { mutableStateOf(false) }
-    val sensorManager = remember {
-        context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
-    }
-    val mapStyleOptions = remember(isDarkMap) {
-        if (isDarkMap) MapStyleOptions(MAP_STYLE_DARK) else null
+    val mapStyleOptions = remember(uiState.isDarkMap) {
+        if (uiState.isDarkMap) MapStyleOptions(MAP_STYLE_DARK) else null
     }
 
-    // Registrar sensor de luminosidad
-    DisposableEffect(Unit) {
-        val lightSensor = sensorManager.getDefaultSensor(Sensor.TYPE_LIGHT)
-        val listener = object : SensorEventListener {
-            override fun onSensorChanged(event: SensorEvent) {
-                isDarkMap = event.values[0] < 50f
-            }
-            override fun onAccuracyChanged(sensor: Sensor, accuracy: Int) {}
-        }
-        sensorManager.registerListener(listener, lightSensor, SensorManager.SENSOR_DELAY_NORMAL)
-        onDispose { sensorManager.unregisterListener(listener) }
-    }
-
-    // ── Obtener ubicación actual ──────────────────────────────────────────────
-    @SuppressLint("MissingPermission")
-    fun fetchCurrentLocation() {
-        if (!locationPermissions.allPermissionsGranted) return
-        scope.launch {
-            try {
-                val fusedClient = LocationServices.getFusedLocationProviderClient(context)
-                val location = fusedClient.getCurrentLocation(
-                    Priority.PRIORITY_HIGH_ACCURACY, null
-                ).await()
-                location?.let {
-                    val latLng = LatLng(it.latitude, it.longitude)
-                    userLocation = latLng
-                    routePoints = routePoints + latLng
-                    if (followUser || routePoints.size == 1) {
-                        cameraPositionState.animate(
-                            CameraUpdateFactory.newLatLngZoom(latLng, 15f)
-                        )
-                    }
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
-    }
-
-    // Solicitar permisos y luego obtener ubicación al iniciar
+    // Solicitar permisos al iniciar
     LaunchedEffect(locationPermissions.allPermissionsGranted) {
         if (locationPermissions.allPermissionsGranted) {
-            fetchCurrentLocation()
+            viewModel.fetchCurrentLocation()
         } else {
             locationPermissions.launchMultiplePermissionRequest()
         }
     }
 
-    // Seguir usuario cuando followUser = true
-    LaunchedEffect(followUser) {
-        if (followUser) {
-            while (followUser) {
-                fetchCurrentLocation()
-                kotlinx.coroutines.delay(5000L)
+    // Mover la cámara cuando cambia la ubicación del usuario o se busca algo
+    LaunchedEffect(uiState.userLocation, uiState.searchedMarker) {
+        if (uiState.followUser) {
+            uiState.userLocation?.let {
+                cameraPositionState.animate(CameraUpdateFactory.newLatLngZoom(it, 15f))
             }
-        }
-    }
-
-    // ── Geocoder: texto → coordenadas ─────────────────────────────────────────
-    fun searchAddress(address: String) {
-        if (address.isBlank()) return
-        scope.launch {
-            try {
-                val geocoder = Geocoder(context, Locale.getDefault())
-                @Suppress("DEPRECATION")
-                val results = geocoder.getFromLocationName(address, 1)
-                if (!results.isNullOrEmpty()) {
-                    val result = results[0]
-                    val latLng = LatLng(result.latitude, result.longitude)
-                    searchedMarker = latLng
-                    searchedTitle = address
-                    cameraPositionState.animate(
-                        CameraUpdateFactory.newLatLngZoom(latLng, 15f)
-                    )
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
-    }
-
-    // ── Geocoder: coordenadas → texto ─────────────────────────────────────────
-    fun reverseGeocode(latLng: LatLng): String {
-        return try {
-            val geocoder = Geocoder(context, Locale.getDefault())
-            @Suppress("DEPRECATION")
-            val results = geocoder.getFromLocation(latLng.latitude, latLng.longitude, 1)
-            if (!results.isNullOrEmpty()) results[0].getAddressLine(0) else "Desconocido"
-        } catch (e: Exception) {
-            "Desconocido"
+        } else if (uiState.searchedMarker != null) {
+            cameraPositionState.animate(CameraUpdateFactory.newLatLngZoom(uiState.searchedMarker!!, 15f))
         }
     }
 
@@ -178,7 +85,7 @@ fun MapScreen(onBack: () -> Unit) {
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFFF5F5F5))
-            .windowInsetsPadding(WindowInsets.systemBars) // <--- ESTO SOLUCIONA LA OBSTRUCCIÓN
+            .windowInsetsPadding(WindowInsets.systemBars)
     ) {
         // Barra superior con toggle y búsqueda
         Column(
@@ -201,8 +108,8 @@ fun MapScreen(onBack: () -> Unit) {
                     modifier = Modifier.weight(1f)
                 )
                 Switch(
-                    checked = followUser,
-                    onCheckedChange = { followUser = it },
+                    checked = uiState.followUser,
+                    onCheckedChange = { viewModel.setFollowUser(it) },
                     colors = SwitchDefaults.colors(
                         checkedTrackColor = Color(0xFF1E3A6E),
                         checkedThumbColor = Color.White
@@ -231,7 +138,7 @@ fun MapScreen(onBack: () -> Unit) {
                 keyboardActions = androidx.compose.foundation.text.KeyboardActions(
                     onDone = {
                         keyboardController?.hide()
-                        searchAddress(addressInput)
+                        viewModel.searchAddress(addressInput)
                     }
                 ),
                 keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
@@ -252,42 +159,47 @@ fun MapScreen(onBack: () -> Unit) {
                 zoomControlsEnabled = true
             ),
             onMapLongClick = { latLng ->
-                scope.launch {
-                    val address = reverseGeocode(latLng)
-                    longClickMarkers = longClickMarkers + Pair(latLng, address)
-                }
+                viewModel.addLongClickMarker(latLng)
             }
         ) {
-            userLocation?.let { loc ->
+            uiState.userLocation?.let { loc ->
                 Marker(
                     state = MarkerState(position = loc),
                     title = "Mi ubicación"
                 )
             }
 
-            if (routePoints.size >= 2) {
+            if (uiState.routePoints.size >= 2) {
                 Polyline(
-                    points = routePoints,
+                    points = uiState.routePoints,
                     color = Color(0xFF5B4FC9),
                     width = 12f
                 )
             }
 
-            searchedMarker?.let { pos ->
+            uiState.searchedMarker?.let { pos ->
                 Marker(
                     state = MarkerState(position = pos),
-                    title = searchedTitle,
-                    snippet = searchedTitle
+                    title = uiState.searchedTitle,
+                    snippet = uiState.searchedTitle
                 )
             }
 
-            longClickMarkers.forEach { (pos, address) ->
+            uiState.longClickMarkers.forEach { (pos, address) ->
                 Marker(
                     state = MarkerState(position = pos),
                     title = address,
                     snippet = address
                 )
             }
+        }
+    }
+
+    // Mostrar Snackbar de error si existe
+    uiState.errorMessage?.let { message ->
+        LaunchedEffect(message) {
+            // Aquí podrías mostrar un Toast o Snackbar
+            viewModel.clearError()
         }
     }
 }
