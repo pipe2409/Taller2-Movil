@@ -178,6 +178,7 @@ fun MapScreen(onBack: () -> Unit) {
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFFF5F5F5))
+            .windowInsetsPadding(WindowInsets.systemBars) // <--- ESTO SOLUCIONA LA OBSTRUCCIÓN
     ) {
         // Barra superior con toggle y búsqueda
         Column(

@@ -91,12 +91,11 @@ fun MediaScreen(onBack: () -> Unit) {
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFFF5F5F5))
+            .windowInsetsPadding(WindowInsets.systemBars) // <--- ESTO SOLUCIONA LA OBSTRUCCIÓN
             .padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(24.dp)
     ) {
-
-        Spacer(modifier = Modifier.height(16.dp))
 
         // Toggle Foto / Video
         Row(
