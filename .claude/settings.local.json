@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./gradlew assembleDebug --no-daemon)",
+      "Bash(java -version)"
+    ]
+  }
+}

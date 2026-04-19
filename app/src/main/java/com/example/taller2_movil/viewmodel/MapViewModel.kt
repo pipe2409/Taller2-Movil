@@ -2,22 +2,27 @@ package com.example.taller2_movil.viewmodel
 
 import android.annotation.SuppressLint
 import android.app.Application
+import android.content.pm.PackageManager
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.location.Geocoder
+import android.os.Looper
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.google.android.gms.location.LocationServices
-import com.google.android.gms.location.Priority
+import com.google.android.gms.location.*
 import com.google.android.gms.maps.model.LatLng
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
 import java.util.Locale
 
 // ── Estado de la pantalla del mapa ───────────────────────────────────────────
@@ -30,7 +35,10 @@ data class MapUiState(
     val followUser: Boolean = false,
     val isDarkMap: Boolean = false,
     val isLoading: Boolean = false,
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    // BONO: ruta trazada entre ubicación actual y destino seleccionado
+    val routePolyline: List<LatLng> = emptyList(),
+    val routeDestination: LatLng? = null
 )
 
 class MapViewModel(application: Application) : AndroidViewModel(application) {
@@ -46,6 +54,27 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
     private val sensorManager =
         context.getSystemService(android.content.Context.SENSOR_SERVICE) as SensorManager
 
+    // ── Solicitud de actualización de ubicación ───────────────────────────────
+    private val locationRequest = LocationRequest.Builder(3000L)
+        .setPriority(Priority.PRIORITY_HIGH_ACCURACY)
+        .setMinUpdateIntervalMillis(1000L)
+        .build()
+
+    private val locationCallback = object : LocationCallback() {
+        override fun onLocationResult(result: LocationResult) {
+            result.lastLocation?.let { loc ->
+                val latLng = LatLng(loc.latitude, loc.longitude)
+                _uiState.update { state ->
+                    state.copy(
+                        userLocation = latLng,
+                        routePoints = state.routePoints + latLng
+                    )
+                }
+            }
+        }
+    }
+
+    // ── Sensor de luminosidad ─────────────────────────────────────────────────
     private val lightSensorListener = object : SensorEventListener {
         override fun onSensorChanged(event: SensorEvent) {
             _uiState.update { it.copy(isDarkMap = event.values[0] < 50f) }
@@ -53,12 +82,10 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
         override fun onAccuracyChanged(sensor: Sensor, accuracy: Int) {}
     }
 
-    // ── Init ──────────────────────────────────────────────────────────────────
     init {
         registerLightSensor()
     }
 
-    // ── Sensor de luminosidad ─────────────────────────────────────────────────
     private fun registerLightSensor() {
         val lightSensor = sensorManager.getDefaultSensor(Sensor.TYPE_LIGHT)
         sensorManager.registerListener(
@@ -68,56 +95,22 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
-    fun unregisterSensors() {
-        sensorManager.unregisterListener(lightSensorListener)
-    }
-
-    override fun onCleared() {
-        super.onCleared()
-        unregisterSensors()
-    }
-
-    // ── Localización ──────────────────────────────────────────────────────────
+    // ── Inicio/parada de actualizaciones de ubicación ────────────────────────
     @SuppressLint("MissingPermission")
-    fun fetchCurrentLocation() {
-        viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
-            try {
-                val location = fusedLocationClient.getCurrentLocation(
-                    Priority.PRIORITY_HIGH_ACCURACY, null
-                ).await()
+    fun startLocationUpdates() {
+        fusedLocationClient.requestLocationUpdates(
+            locationRequest,
+            locationCallback,
+            Looper.getMainLooper()
+        )
+    }
 
-                location?.let {
-                    val latLng = LatLng(it.latitude, it.longitude)
-                    _uiState.update { state ->
-                        state.copy(
-                            userLocation = latLng,
-                            routePoints = state.routePoints + latLng,
-                            isLoading = false
-                        )
-                    }
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-                _uiState.update {
-                    it.copy(isLoading = false, errorMessage = "Error obteniendo ubicación")
-                }
-            }
-        }
+    fun stopLocationUpdates() {
+        fusedLocationClient.removeLocationUpdates(locationCallback)
     }
 
     fun setFollowUser(follow: Boolean) {
         _uiState.update { it.copy(followUser = follow) }
-        if (follow) startFollowingUser()
-    }
-
-    private fun startFollowingUser() {
-        viewModelScope.launch {
-            while (_uiState.value.followUser) {
-                fetchCurrentLocation()
-                kotlinx.coroutines.delay(5000L)
-            }
-        }
     }
 
     // ── Geocoder: texto → coordenadas ─────────────────────────────────────────
@@ -136,6 +129,8 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
                         state.copy(
                             searchedMarker = latLng,
                             searchedTitle = address,
+                            routeDestination = latLng,
+                            routePolyline = emptyList(),
                             isLoading = false
                         )
                     }
@@ -145,7 +140,6 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
             } catch (e: Exception) {
-                e.printStackTrace()
                 _uiState.update {
                     it.copy(isLoading = false, errorMessage = "Error buscando dirección")
                 }
@@ -167,23 +161,124 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 _uiState.update { state ->
                     state.copy(
-                        longClickMarkers = state.longClickMarkers + Pair(latLng, address)
+                        longClickMarkers = state.longClickMarkers + Pair(latLng, address),
+                        routeDestination = latLng,
+                        routePolyline = emptyList()
                     )
                 }
             } catch (e: Exception) {
-                e.printStackTrace()
                 val fallback = "Lat: %.4f, Lng: %.4f".format(latLng.latitude, latLng.longitude)
                 _uiState.update { state ->
                     state.copy(
-                        longClickMarkers = state.longClickMarkers + Pair(latLng, fallback)
+                        longClickMarkers = state.longClickMarkers + Pair(latLng, fallback),
+                        routeDestination = latLng,
+                        routePolyline = emptyList()
                     )
                 }
             }
         }
     }
 
+    // ── BONO: Directions API → ruta entre ubicación actual y destino ──────────
+    fun fetchRoute(destination: LatLng) {
+        val origin = _uiState.value.userLocation ?: run {
+            _uiState.update { it.copy(errorMessage = "Ubicación actual no disponible") }
+            return
+        }
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            try {
+                val apiKey = getApiKey()
+                val url = buildString {
+                    append("https://maps.googleapis.com/maps/api/directions/json")
+                    append("?origin=${origin.latitude},${origin.longitude}")
+                    append("&destination=${destination.latitude},${destination.longitude}")
+                    append("&key=$apiKey")
+                }
+                val responseText = withContext(Dispatchers.IO) {
+                    val conn = URL(url).openConnection() as HttpURLConnection
+                    conn.connectTimeout = 10_000
+                    conn.readTimeout = 10_000
+                    conn.requestMethod = "GET"
+                    conn.inputStream.bufferedReader().use { it.readText() }.also {
+                        conn.disconnect()
+                    }
+                }
+                val json = JSONObject(responseText)
+                val status = json.optString("status")
+                if (status == "OK") {
+                    val encoded = json
+                        .getJSONArray("routes")
+                        .getJSONObject(0)
+                        .getJSONObject("overview_polyline")
+                        .getString("points")
+                    val points = decodePolyline(encoded)
+                    _uiState.update { it.copy(routePolyline = points, isLoading = false) }
+                } else {
+                    _uiState.update {
+                        it.copy(isLoading = false, errorMessage = "Sin ruta disponible: $status")
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                _uiState.update {
+                    it.copy(isLoading = false, errorMessage = "Error al obtener ruta")
+                }
+            }
+        }
+    }
+
+    // ── Obtener API key desde el manifest ────────────────────────────────────
+    private fun getApiKey(): String {
+        return try {
+            @Suppress("DEPRECATION")
+            val info = context.packageManager.getApplicationInfo(
+                context.packageName,
+                PackageManager.GET_META_DATA
+            )
+            info.metaData?.getString("com.google.android.geo.API_KEY") ?: ""
+        } catch (e: Exception) {
+            ""
+        }
+    }
+
+    // ── Decodificador de Google Encoded Polyline ─────────────────────────────
+    private fun decodePolyline(encoded: String): List<LatLng> {
+        val poly = mutableListOf<LatLng>()
+        var index = 0
+        var lat = 0
+        var lng = 0
+        while (index < encoded.length) {
+            var b: Int
+            var shift = 0
+            var result = 0
+            do {
+                b = encoded[index++].code - 63
+                result = result or ((b and 0x1f) shl shift)
+                shift += 5
+            } while (b >= 0x20)
+            lat += if (result and 1 != 0) (result shr 1).inv() else result shr 1
+            shift = 0
+            result = 0
+            do {
+                b = encoded[index++].code - 63
+                result = result or ((b and 0x1f) shl shift)
+                shift += 5
+            } while (b >= 0x20)
+            lng += if (result and 1 != 0) (result shr 1).inv() else result shr 1
+            poly.add(LatLng(lat.toDouble() / 1E5, lng.toDouble() / 1E5))
+        }
+        return poly
+    }
+
     // ── Limpiar errores ───────────────────────────────────────────────────────
     fun clearError() {
         _uiState.update { it.copy(errorMessage = null) }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        sensorManager.unregisterListener(lightSensorListener)
+        stopLocationUpdates()
     }
 }

@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Directions
 import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -43,6 +44,7 @@ fun MapScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val keyboardController = LocalSoftwareKeyboardController.current
+    val snackbarHostState = remember { SnackbarHostState() }
 
     // ── Permisos de localización ──────────────────────────────────────────────
     val locationPermissions = rememberMultiplePermissionsState(
@@ -60,146 +62,209 @@ fun MapScreen(
         if (uiState.isDarkMap) MapStyleOptions(MAP_STYLE_DARK) else null
     }
 
-    // Solicitar permisos al iniciar
+    // Iniciar actualizaciones de ubicación al conceder permisos
     LaunchedEffect(locationPermissions.allPermissionsGranted) {
         if (locationPermissions.allPermissionsGranted) {
-            viewModel.fetchCurrentLocation()
+            viewModel.startLocationUpdates()
         } else {
             locationPermissions.launchMultiplePermissionRequest()
         }
     }
 
-    // Mover la cámara cuando cambia la ubicación del usuario o se busca algo
-    LaunchedEffect(uiState.userLocation, uiState.searchedMarker) {
+    // Detener actualizaciones al salir de la pantalla
+    DisposableEffect(Unit) {
+        onDispose { viewModel.stopLocationUpdates() }
+    }
+
+    // Seguir al usuario con la cámara
+    LaunchedEffect(uiState.userLocation) {
         if (uiState.followUser) {
             uiState.userLocation?.let {
                 cameraPositionState.animate(CameraUpdateFactory.newLatLngZoom(it, 15f))
             }
-        } else if (uiState.searchedMarker != null) {
-            cameraPositionState.animate(CameraUpdateFactory.newLatLngZoom(uiState.searchedMarker!!, 15f))
+        }
+    }
+
+    // Mover cámara al resultado de búsqueda
+    LaunchedEffect(uiState.searchedMarker) {
+        uiState.searchedMarker?.let {
+            cameraPositionState.animate(CameraUpdateFactory.newLatLngZoom(it, 15f))
+        }
+    }
+
+    // Mostrar errores en Snackbar
+    LaunchedEffect(uiState.errorMessage) {
+        uiState.errorMessage?.let { msg ->
+            snackbarHostState.showSnackbar(msg)
+            viewModel.clearError()
         }
     }
 
     // ── UI ────────────────────────────────────────────────────────────────────
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color(0xFFF5F5F5))
-            .windowInsetsPadding(WindowInsets.systemBars)
-    ) {
-        // Barra superior con toggle y búsqueda
+    Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) }
+    ) { innerPadding ->
         Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .background(Color.White)
-                .padding(horizontal = 16.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+                .fillMaxSize()
+                .background(Color(0xFFF5F5F5))
+                .padding(innerPadding)
+                .windowInsetsPadding(WindowInsets.systemBars)
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+            // Barra superior
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color.White)
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text(
-                    text = "Mover el mapa con la posición del usuario?",
-                    fontSize = 13.sp,
-                    color = Color.DarkGray,
-                    fontWeight = FontWeight.Medium,
-                    modifier = Modifier.weight(1f)
-                )
-                Switch(
-                    checked = uiState.followUser,
-                    onCheckedChange = { viewModel.setFollowUser(it) },
-                    colors = SwitchDefaults.colors(
-                        checkedTrackColor = Color(0xFF1E3A6E),
-                        checkedThumbColor = Color.White
+                // Toggle seguir usuario
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "Seguir mi posición en el mapa",
+                        fontSize = 13.sp,
+                        color = Color.DarkGray,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.weight(1f)
                     )
-                )
-            }
+                    Switch(
+                        checked = uiState.followUser,
+                        onCheckedChange = { viewModel.setFollowUser(it) },
+                        colors = SwitchDefaults.colors(
+                            checkedTrackColor = Color(0xFF1E3A6E),
+                            checkedThumbColor = Color.White
+                        )
+                    )
+                }
 
-            OutlinedTextField(
-                value = addressInput,
-                onValueChange = { addressInput = it },
-                label = { Text("Dirección") },
-                leadingIcon = {
-                    Icon(
-                        imageVector = Icons.Filled.Navigation,
-                        contentDescription = null,
-                        tint = Color(0xFF1E3A6E)
+                // Búsqueda de dirección
+                OutlinedTextField(
+                    value = addressInput,
+                    onValueChange = { addressInput = it },
+                    label = { Text("Buscar dirección") },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Filled.Navigation,
+                            contentDescription = null,
+                            tint = Color(0xFF1E3A6E)
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp),
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Color(0xFF1E3A6E),
+                        focusedLabelColor = Color(0xFF1E3A6E)
+                    ),
+                    keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+                        onDone = {
+                            keyboardController?.hide()
+                            viewModel.searchAddress(addressInput)
+                        }
+                    ),
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        imeAction = androidx.compose.ui.text.input.ImeAction.Done
                     )
-                },
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(8.dp),
-                singleLine = true,
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = Color(0xFF1E3A6E),
-                    focusedLabelColor = Color(0xFF1E3A6E)
-                ),
-                keyboardActions = androidx.compose.foundation.text.KeyboardActions(
-                    onDone = {
-                        keyboardController?.hide()
-                        viewModel.searchAddress(addressInput)
+                )
+
+                // BONO: botón "Trazar ruta" — aparece cuando hay un destino seleccionado
+                if (uiState.routeDestination != null) {
+                    Button(
+                        onClick = { viewModel.fetchRoute(uiState.routeDestination!!) },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF1E3A6E),
+                            contentColor = Color.White
+                        ),
+                        enabled = !uiState.isLoading && uiState.userLocation != null
+                    ) {
+                        if (uiState.isLoading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                color = Color.White,
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text("Calculando ruta…", fontSize = 14.sp)
+                        } else {
+                            Icon(
+                                imageVector = Icons.Filled.Directions,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text("Trazar ruta al destino", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                        }
                     }
+                }
+            }
+
+            // Mapa principal
+            GoogleMap(
+                modifier = Modifier.fillMaxSize(),
+                cameraPositionState = cameraPositionState,
+                properties = MapProperties(
+                    isMyLocationEnabled = locationPermissions.allPermissionsGranted,
+                    mapStyleOptions = mapStyleOptions
                 ),
-                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                    imeAction = androidx.compose.ui.text.input.ImeAction.Done
-                )
-            )
-        }
+                uiSettings = MapUiSettings(
+                    myLocationButtonEnabled = true,
+                    zoomControlsEnabled = true
+                ),
+                onMapLongClick = { latLng ->
+                    viewModel.addLongClickMarker(latLng)
+                }
+            ) {
+                // Marcador de ubicación actual
+                uiState.userLocation?.let { loc ->
+                    Marker(
+                        state = MarkerState(position = loc),
+                        title = "Mi ubicación"
+                    )
+                }
 
-        GoogleMap(
-            modifier = Modifier.fillMaxSize(),
-            cameraPositionState = cameraPositionState,
-            properties = MapProperties(
-                isMyLocationEnabled = locationPermissions.allPermissionsGranted,
-                mapStyleOptions = mapStyleOptions
-            ),
-            uiSettings = MapUiSettings(
-                myLocationButtonEnabled = true,
-                zoomControlsEnabled = true
-            ),
-            onMapLongClick = { latLng ->
-                viewModel.addLongClickMarker(latLng)
-            }
-        ) {
-            uiState.userLocation?.let { loc ->
-                Marker(
-                    state = MarkerState(position = loc),
-                    title = "Mi ubicación"
-                )
-            }
+                // Polyline de recorrido (puntos de movimiento del usuario)
+                if (uiState.routePoints.size >= 2) {
+                    Polyline(
+                        points = uiState.routePoints,
+                        color = Color(0xFF5B4FC9),
+                        width = 10f
+                    )
+                }
 
-            if (uiState.routePoints.size >= 2) {
-                Polyline(
-                    points = uiState.routePoints,
-                    color = Color(0xFF5B4FC9),
-                    width = 12f
-                )
-            }
+                // Marcador de dirección buscada
+                uiState.searchedMarker?.let { pos ->
+                    Marker(
+                        state = MarkerState(position = pos),
+                        title = uiState.searchedTitle,
+                        snippet = uiState.searchedTitle
+                    )
+                }
 
-            uiState.searchedMarker?.let { pos ->
-                Marker(
-                    state = MarkerState(position = pos),
-                    title = uiState.searchedTitle,
-                    snippet = uiState.searchedTitle
-                )
-            }
+                // Marcadores de long-click con dirección invertida
+                uiState.longClickMarkers.forEach { (pos, address) ->
+                    Marker(
+                        state = MarkerState(position = pos),
+                        title = address,
+                        snippet = address
+                    )
+                }
 
-            uiState.longClickMarkers.forEach { (pos, address) ->
-                Marker(
-                    state = MarkerState(position = pos),
-                    title = address,
-                    snippet = address
-                )
+                // BONO: Polyline de ruta trazada (Directions API)
+                if (uiState.routePolyline.size >= 2) {
+                    Polyline(
+                        points = uiState.routePolyline,
+                        color = Color(0xFF00C853),
+                        width = 16f
+                    )
+                }
             }
-        }
-    }
-
-    // Mostrar Snackbar de error si existe
-    uiState.errorMessage?.let { message ->
-        LaunchedEffect(message) {
-            // Aquí podrías mostrar un Toast o Snackbar
-            viewModel.clearError()
         }
     }
 }
