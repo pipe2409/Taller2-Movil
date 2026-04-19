@@ -47,8 +47,11 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.material.icons.extended)
 
-    // Permisos (Accompanist) - Versión directa para evitar errores de catálogo
-    implementation("com.google.accompanist:accompanist-permissions:0.37.3")
+    // Permisos (Accompanist)
+    implementation(libs.accompanist.permissions)
+    
+    // Corrutinas para Play Services (necesario para .await() en tareas de ubicación)
+    implementation(libs.kotlinx.coroutines.play.services)
 
     // Mapas y Localización
     implementation(libs.google.maps)
