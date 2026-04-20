@@ -237,6 +237,11 @@ fun VideoPlayer(uri: Uri, modifier: Modifier = Modifier) {
                 useController = true
             }
         },
+        update = { playerView ->
+            if (playerView.player != exoPlayer) {
+                playerView.player = exoPlayer
+            }
+        },
         modifier = modifier
     )
 }
